@@ -134,9 +134,9 @@ for DB in $DBS; do
 
     # Paths
     S3_BASE="s3://$BUCKET/$BUCKET_DIR/${RDS_INSTANCE}-${DB}"
-    DAILY_PATH="$S3_BASE/daily/$NOWDATE.sql.tar.gz"
-    WEEKLY_PATH="$S3_BASE/weekly/$NOWDATE.sql.tar.gz"
-    MONTHLY_PATH="$S3_BASE/monthly/$NOWDATE.sql.tar.gz"
+    DAILY_PATH="$S3_BASE/daily/${DB}-$NOWDATE.sql.tar.gz"
+    WEEKLY_PATH="$S3_BASE/weekly/${DB}-$NOWDATE.sql.tar.gz"
+    MONTHLY_PATH="$S3_BASE/monthly/${DB}-$NOWDATE.sql.tar.gz"
 
     # Daily (main) backup
     set +e
