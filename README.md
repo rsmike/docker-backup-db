@@ -1,7 +1,7 @@
 # Database Backup service for TI
 
 - finds the latest automatic snapshot for a given RDS instance
-- restores a temporary RDS instance
+- restores a temporary RDS instance, applying security groups from the main instance
 - backs up all databases via mysqldump
 - uploads compressed dumps to S3
 - sorts out monthly, daily, weekly
