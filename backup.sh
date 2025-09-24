@@ -43,7 +43,7 @@ cleanup_old_backups() {
     local keep="$2"
 
     local files
-    files=$(aws s3 ls "$prefix/" | awk '{print $4}' | grep '\.sql\.tar\.gz$')
+    files=$(aws s3 ls "$prefix/" | awk '{print $4}' | grep '\.sql\.gz$')
 
     local count
     count=$(echo "$files" | grep -c .) # Counts non-empty lines, correctly returns 0
@@ -134,9 +134,9 @@ for DB in $DBS; do
 
     # Paths
     S3_BASE="s3://$BUCKET/$BUCKET_DIR/${RDS_INSTANCE}-${DB}"
-    DAILY_PATH="$S3_BASE/daily/${DB}-$NOWDATE.sql.tar.gz"
-    WEEKLY_PATH="$S3_BASE/weekly/${DB}-$NOWDATE.sql.tar.gz"
-    MONTHLY_PATH="$S3_BASE/monthly/${DB}-$NOWDATE.sql.tar.gz"
+    DAILY_PATH="$S3_BASE/daily/${DB}-$NOWDATE.sql.gz"
+    WEEKLY_PATH="$S3_BASE/weekly/${DB}-$NOWDATE.sql.gz"
+    MONTHLY_PATH="$S3_BASE/monthly/${DB}-$NOWDATE.sql.gz"
 
     # Daily (main) backup
     set +e
