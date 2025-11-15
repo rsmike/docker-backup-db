@@ -43,10 +43,10 @@ cleanup_old_backups() {
     local keep="$2"
 
     local files
-    files=$(aws s3 ls "$prefix/" | awk '{print $4}' | grep '\.sql\.gz$')
+    files=$(aws s3 ls "$prefix/" | awk '{print $4}' | grep '\.sql\.gz$' || true)
 
     local count
-    count=$(echo "$files" | grep -c .) # Counts non-empty lines, correctly returns 0
+    count=$(echo "$files" | grep -c . || echo "0")
 
     if [ "$count" -gt "$keep" ]; then
         echo "$files" | head -n -"$keep" | while read -r f; do
@@ -99,6 +99,11 @@ MAIN_SGS=$(aws rds describe-db-instances --db-instance-identifier "$RDS_INSTANCE
   --query 'DBInstances[0].VpcSecurityGroups[*].VpcSecurityGroupId' \
   --output text)
 
+if [ -z "$MAIN_SGS" ]; then
+    echo "[ERROR] No security groups found for RDS instance"
+    exit 1
+fi
+
 echo "[INFO] Creating temporary RDS instance from latest snapshot..."
 aws rds restore-db-instance-from-db-snapshot \
   --db-instance-identifier "$TMP_RDS_INSTANCE" \
@@ -124,9 +129,21 @@ MYSQL_PORT=3306
 MYSQL_USER="${MYSQL_USER:?MYSQL_USER must be set}"
 MYSQL_PASSWORD="${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set}"
 
+# Create temporary MySQL config file to avoid password in process list
+MYSQL_CNF=$(mktemp)
+cat > "$MYSQL_CNF" <<EOF
+[client]
+host=$MYSQL_HOST
+port=$MYSQL_PORT
+user=$MYSQL_USER
+password=$MYSQL_PASSWORD
+EOF
+chmod 600 "$MYSQL_CNF"
+trap 'rm -f "$MYSQL_CNF"; echo "[ERROR] Backup failed!"; notify_fail "Backup script error"; cleanup_temp_instance; exit 1' ERR INT TERM
+
 # ------------------ DUMP DATABASES ------------------
 
-DBS=$(mysql -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" -BNe 'show databases' \
+DBS=$(mysql --defaults-extra-file="$MYSQL_CNF" -BNe 'show databases' \
       | grep -Ev 'mysql|information_schema|performance_schema|sys|innodb|tmp|test_')
 
 for DB in $DBS; do
@@ -138,14 +155,13 @@ for DB in $DBS; do
     WEEKLY_PATH="$S3_BASE/weekly/${DB}-$NOWDATE.sql.gz"
     MONTHLY_PATH="$S3_BASE/monthly/${DB}-$NOWDATE.sql.gz"
 
-    # Daily (main) backup
+    # Daily (main) backup - dump to temp file first to validate size
+    TEMP_DUMP=$(mktemp)
     set +e
 
-    mysqldump -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" \
+    mysqldump --defaults-extra-file="$MYSQL_CNF" \
         --quote-names --set-gtid-purged=OFF --single-transaction --max_allowed_packet=1G \
-        --quick --opt --create-options "$DB" \
-        | gzip -9 \
-        | aws s3 cp - "$DAILY_PATH" --storage-class STANDARD_IA --no-progress
+        --quick --opt --create-options "$DB" > "$TEMP_DUMP"
 
     status=$?
     set -e
@@ -153,9 +169,26 @@ for DB in $DBS; do
     if [ $status -ne 0 ]; then
         echo "[ERROR] Failed backup for $DB"
         notify_fail "Backup failed for $DB"
+        rm -f "$TEMP_DUMP"
         EXIT_STATUS=1
         continue
     fi
+
+    # Validate backup size (must be at least 1KB)
+    DUMP_SIZE=$(stat -c%s "$TEMP_DUMP" 2>/dev/null || stat -f%z "$TEMP_DUMP")
+    if [ "$DUMP_SIZE" -lt 1024 ]; then
+        echo "[ERROR] Backup for $DB is suspiciously small ($DUMP_SIZE bytes) - skipping upload"
+        notify_fail "Backup for $DB is too small"
+        rm -f "$TEMP_DUMP"
+        EXIT_STATUS=1
+        continue
+    fi
+
+    echo "[INFO] Backup size: $(numfmt --to=iec-i --suffix=B $DUMP_SIZE 2>/dev/null || echo "$DUMP_SIZE bytes")"
+
+    # Compress and upload
+    gzip -9 < "$TEMP_DUMP" | aws s3 cp - "$DAILY_PATH" --storage-class STANDARD_IA --no-progress
+    rm -f "$TEMP_DUMP"
 
     echo "[INFO] Daily backup uploaded: $DAILY_PATH"
     cleanup_old_backups "$S3_BASE/daily" $DAILY_KEEP
@@ -176,8 +209,9 @@ for DB in $DBS; do
     echo "[INFO] Finished $DB"
 done
 
-# Cleanup temp RDS instance
+# Cleanup temp RDS instance and MySQL config file
 cleanup_temp_instance
+rm -f "$MYSQL_CNF"
 
 if [ "$EXIT_STATUS" -eq 0 ]; then
     notify_ok "All databases backed up successfully."
