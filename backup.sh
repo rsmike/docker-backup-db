@@ -43,10 +43,10 @@ cleanup_old_backups() {
     local keep="$2"
 
     local files
-    files=$(aws s3 ls "$prefix/" | awk '{print $4}' | grep '\.sql\.gz$')
+    files=$(aws s3 ls "$prefix/" | awk '{print $4}' | grep '\.sql\.gz$' || true)
 
     local count
-    count=$(echo "$files" | grep -c .) # Counts non-empty lines, correctly returns 0
+    count=$(echo "$files" | grep -c . || echo "0")
 
     if [ "$count" -gt "$keep" ]; then
         echo "$files" | head -n -"$keep" | while read -r f; do
